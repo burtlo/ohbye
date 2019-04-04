@@ -82,10 +82,173 @@ module Ohai
   module DSL
     class Plugin
 
-      include Ohai::Mixin::OS
-      include Ohai::Mixin::Command
+      def __collect_os(family)
+        case family
+        when /aix/
+          "aix"
+        when /darwin$/
+          "darwin"
+        when /linux/
+          "linux"
+        when /freebsd/
+          "freebsd"
+        when /openbsd/
+          "openbsd"
+        when /netbsd/
+          "netbsd"
+        when /dragonfly/
+          "dragonflybsd"
+        when /solaris2/
+          "solaris2"
+        when /mswin|mingw32|windows/
+          # After long discussion in IRC the "powers that be" have come to a consensus
+          # that no Windows platform exists that was not based on the
+          # Windows_NT kernel, so we herby decree that "windows" will refer to all
+          # platforms built upon the Windows_NT kernel and have access to win32 or win64
+          # subsystems.
+          "windows"
+        else
+          nil
+        end
+      end
+
+      # include Ohai::Mixin::OS
+      def collect_os
+        # NOTE: The original mixin for this returned some values different than
+        #   what is being returned by the train connection.
+        # TODO: the result when on centos was the value redhat but really what 
+        #   what we want is linux - at least that is what I believe is suppose
+        #   to be the os value for the plugins to match on the collect_data blocks
+        found_os = data[:backend].os[:family_hierarchy].find { |family| __collect_os(family) }
+        # require 'pry' ; binding.pry
+        if found_os.nil?
+          require 'pry' ; binding.pry
+          logger.error('There is a problem with the os detection mechanism')
+        end
+        found_os
+      end
+
+      # include Ohai::Mixin::Command
+      # This mixin is replaced currently with this method.
+      def shell_out(cmd, **options)
+        # require 'pry' ; binding.pry
+        logger.info("Running: #{cmd}")
+        result = data[:backend].run_command(cmd)
+        result
+      end
+
+      def can_connect?(address, port = 80, timeout = 2)
+        # require 'pry' ; binding.pry
+        shell_out("curl -Is #{address}:#{port} --connect-timeout #{timeout}").exit_status == 0
+      end
+
       include Ohai::Mixin::SecondsToHuman
-      include Ohai::Util::FileHelper
+      
+      # include Ohai::Util::FileHelper
+      # This mixin is replaced currently with this method.
+      def which(cmd)
+        # require 'pry' ; binding.pry
+
+        # TODO: the interface here is poor it returns the cmd back when it fails to find
+        #   a full path. On success it returns the full path.
+        #
+        #   Perhaps:
+        # 
+        #     result = which('ifconfig').args('-a').run
+        #     result.stdout
+        #     result.stderr
+        #     result.exit_status
+        #     result.success?
+        #     result.success!     # throw an exception if the command failed
+        #     result.fail?
+        #     result.fail!        # throw an exception if the command successful
+        #
+        #   If which were to fail then it would return a FailedToFindCommand that would still
+        #   accept args which would still run. The choices with result feels mostly poor
+        #   all around. Generally it could throw exception by default or be disabled by default
+        #   Or it could be suggested to use the exclamation methods to control the flow 
+        #   that way by default.
+
+        # TODO: better performance can be found in the comments below
+        # The ssh backend can give you the results of `echo $PATH`
+        # But often commands found in /sbin were not being found and that may be because of
+        # some difference in the shell created.
+        #
+        # We can call which and if it doesn't come up we could resort to combing every path ...
+        #   but this is where it may more efficient to ls every directory and create a big table
+        #   of paths and then search through that ... this means the first time which
+        #   misses then the multple `ls` would fire and the data would be parsed and stored.
+        #   all other calls would use that cache.
+
+        which = data[:backend].run_command("which #{cmd}")
+        return which.stdout.chomp if which.exit_status == 0
+
+        # paths = ENV["PATH"].split(File::PATH_SEPARATOR) + [ "/bin", "/usr/bin", "/sbin", "/usr/sbin" ]
+        paths = data[:backend].run_command("echo $PATH").stdout.split(File::PATH_SEPARATOR) + [ "/bin", "/usr/bin", "/sbin", "/usr/sbin" ]
+        paths.each do |path|
+          filename = File.join(path, cmd)
+          if file_executable?(filename)
+            logger.trace("Plugin #{name}: found #{cmd} at #{filename}")
+            return filename
+          end
+        end
+        logger.warn("Plugin #{name}: did not find #{cmd}")
+        # NOTE this was a poor interface - originally this returned a filename or false
+        #  I have changed it to return the same command that it was given and that will
+        #  likely result in no data collected but at least a well-formed command
+        cmd
+      end
+
+      # This is to provide a replacement for `File.exist?`
+      def file_exist?(filename)
+        # require 'pry' ; binding.pry
+        data[:backend].file(filename).exist?
+      end
+
+      # This is to provide a replacement for `File.open`
+      # returning a stringio gets you support for `gets` `lines`
+      # taking the block brings it on par with `File.open` use of block
+      def file_open(filename)
+        # require 'pry' ; binding.pry
+        content = data[:backend].file(filename).content
+        # NOTE: StringIO is the superclass for File. This has a nearly
+        #   the same interface which gives it the ability to be a replacement
+        string_io = StringIO.new content
+        yield string_io if block_given?
+        string_io
+      end
+
+      # This is to provide a replacement for `File.executable?`
+      def file_executable?(filename)
+        # require 'pry' ; binding.pry
+        # TODO: Is the file executable to the current user?
+        #   At the moment I don't know how to get the current user (local and remote)          
+        # TODO: this will need to be updated to support windows
+        file_mode = data[:backend].file(filename).stat[:mode]
+        permissions = file_mode.to_i.to_s(8)
+
+        # TODO: use another mechanic to find executable - bit mask / etc.
+        #   as this is a quick implementation to to satisfy some common modes
+        permissions == "755" || permissions == "555"
+      end
+
+      # This is to provide a replacement for `File.read`
+      def file_read(filename)
+        # require 'pry' ; binding.pry
+        data[:backend].file(filename).content
+      end
+
+      # This is to provide a replacement for `File.realines`
+      def file_readlines(filename)
+        file_read(filename).lines
+      end
+
+      # This is to provide a replacement for Dir[] and Dir.glob
+      def files_in_dir(path)
+        # require 'pry' ; binding.pry
+        # TODO: This would need to support windows.
+        data[:backend].run_command("ls -d #{path}").stdout.split
+      end
 
       attr_reader :data
       attr_reader :failed

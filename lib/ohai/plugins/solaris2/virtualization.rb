@@ -36,7 +36,7 @@ Ohai.plugin(:Virtualization) do
 
     # Detect paravirt KVM/QEMU from cpuinfo, report as KVM
     psrinfo_path = Ohai.abs_path( "/usr/sbin/psrinfo" )
-    if File.exist?(psrinfo_path)
+    if file_exist?(psrinfo_path)
       so = shell_out("#{psrinfo_path} -pv")
       if so.stdout =~ /QEMU Virtual CPU|Common KVM processor|Common 32-bit KVM processor/
         virtualization[:system] = "kvm"
@@ -54,7 +54,7 @@ Ohai.plugin(:Virtualization) do
       virtualization[:systems][guest.to_sym] = "guest"
     end
 
-    if File.executable?("/usr/sbin/zoneadm")
+    if file_executable?("/usr/sbin/zoneadm")
       zones = Mash.new
       so = shell_out("zoneadm list -pc")
       so.stdout.lines do |line|
