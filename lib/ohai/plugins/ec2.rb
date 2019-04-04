@@ -31,7 +31,7 @@ Ohai.plugin(:EC2) do
   require "base64"
 
   include Ohai::Mixin::Ec2Metadata
-  include Ohai::Mixin::HttpHelper
+  # include Ohai::Mixin::HttpHelper
 
   provides "ec2"
 
@@ -98,8 +98,8 @@ Ohai.plugin(:EC2) do
   # @param path[String] abs path to the file
   # @return [String] contents of the file if it exists
   def file_val_if_exists(path)
-    if ::File.exist?(path)
-      ::File.read(path)
+    if file_exist?(path)
+      file_read(path)
     end
   end
 
@@ -110,7 +110,7 @@ Ohai.plugin(:EC2) do
 
     # Even if it looks like EC2 try to connect first
     if has_ec2_xen_uuid? || has_ec2_amazon_dmi? || has_ec2_xen_dmi? || has_ec2_identifying_number?
-      return true if can_socket_connect?(Ohai::Mixin::Ec2Metadata::EC2_METADATA_ADDR, 80)
+      can_connect?(Ohai::Mixin::Ec2Metadata::EC2_METADATA_ADDR)
     end
   end
 
