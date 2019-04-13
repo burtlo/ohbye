@@ -30,29 +30,6 @@ Ohai.plugin(:Network) do
     [prop].flatten.map { |addr| addr.include?(":") ? addr : addr.scan(/.{1,2}/).join(":") }
   end
 
-  def network_data
-    @network_data ||= begin
-      data = {}
-      wmi = WmiLite::Wmi.new
-      data[:addresses] = wmi.instances_of("Win32_NetworkAdapterConfiguration")
-
-      # If we are running on windows nano or another operating system from the future
-      # that does not populate the deprecated win32_* WMI classes, then we should
-      # grab data from the newer MSFT_* classes
-      return msft_adapter_data if data[:addresses].count == 0
-      data[:adapters] = wmi.instances_of("Win32_NetworkAdapter")
-      data
-    end
-  end
-
-  def msft_adapter_data
-    data = {}
-    wmi = WmiLite::Wmi.new("ROOT/StandardCimv2")
-    data[:addresses] = wmi.instances_of("MSFT_NetIPAddress")
-    data[:adapters] = wmi.instances_of("MSFT_NetAdapter")
-    data
-  end
-
   # Returns interface code for an interface
   #
   # Interface Index (if present, Index otherwise) will be converted in hexadecimal format
@@ -106,16 +83,13 @@ Ohai.plugin(:Network) do
         arr << { index: v["index"],
                  interface_index: v["interface_index"],
                  default_ip_gateway: prefer_ipv4(v["default_ip_gateway"]),
-                 ip_connection_metric: v["ip_connection_metric"] }
+                 ip_connection_metric: v["ip_connection_metric"] } unless v["ip_connection_metric"].nil?
       end
       arr
     end.min_by { |r| r[:ip_connection_metric] }
   end
 
   collect_data(:windows) do
-
-    require "wmi-lite/wmi"
-
     iface = Mash.new
     iface_config = Mash.new
     iface_instance = Mash.new
@@ -124,27 +98,79 @@ Ohai.plugin(:Network) do
     counters Mash.new unless counters
     counters[:network] = Mash.new unless counters[:network]
 
-    network_data[:addresses].each do |adapter|
-      i = adapter["index"] || adapter["InterfaceIndex"]
-      iface_config[i] = Mash.new unless iface_config[i]
-      iface_config[i][:ip_address] ||= []
-      iface_config[i][:ip_address] << adapter["IPAddress"]
+    # @see https://docs.microsoft.com/en-us/windows/desktop/cimwin32prov/win32-networkadapterconfiguration
+    adptr_config_cmd = 'Get-WmiObject Win32_NetworkAdapterConfiguration | ForEach-Object { $adptr = $_ ; $adptr.Properties | ForEach-Object { Write-Host "$($adptr.Index),$($adptr.InterfaceIndex),$($_.Name),$($_.Type),$($_.IsArray),$($_.Value)" } }'
+    adapter_config_properties = shell_out(adptr_config_cmd).stdout.strip
 
-      adapter.wmi_ole_object.properties_.each do |p|
-        if iface_config[i][p.name.wmi_underscore.to_sym].nil?
-          iface_config[i][p.name.wmi_underscore.to_sym] = adapter[p.name.downcase]
+    adapter_config_properties.lines.each do |line|
+      index, interface_index, property_name, property_type, is_array, property_value = line.strip.split(',',6)
+      true_index = index || interface_index
+      iface_config[true_index] ||= Mash.new
+      is_array = (is_array == 'True' ? true : false)
+
+      if is_array
+        property_value = property_value.to_s.split(" ").map do |subvalue|
+          if property_type == 'Boolean'
+            subvalue == 'True' ? true : false
+          elsif property_type =~ /UInt(?:64|32|16|8)/
+            subvalue.to_i
+          else
+            subvalue
+          end
         end
+      else
+        property_value = true if property_type == 'Boolean' && property_value == 'True'
+        property_value = false if property_type == 'Boolean' && property_value == 'False'
+        if property_type =~ /UInt(?:64|32|16|8)/
+          if property_value.to_s != ''
+            property_value = property_value.to_i
+          else
+            property_value = nil
+          end
+        end
+        property_value = nil if property_type == 'String' && property_value.to_s == ''
       end
-    end
 
-    network_data[:adapters].each do |adapter|
-      i = adapter["index"] || adapter["InterfaceIndex"]
-      iface_instance[i] = Mash.new
-      adapter.wmi_ole_object.properties_.each do |p|
-        # skip wmi class name fields which make no sense in ohai
-        next if %w{creation_class_name system_creation_class_name}.include?(p.name.wmi_underscore)
-        iface_instance[i][p.name.wmi_underscore.to_sym] = adapter[p.name.downcase]
+      iface_config[true_index][property_name.wmi_underscore.to_sym] ||= property_value
+    end
+  
+    # @see https://docs.microsoft.com/en-us/windows/desktop/cimwin32prov/win32-networkadapter
+    adpter_cmd = 'Get-WmiObject Win32_NetworkAdapter | ForEach-Object { $adptr = $_ ; $adptr.Properties | ForEach-Object { Write-Host "$($adptr.Index),$($adptr.InterfaceIndex),$($adptr.Name),$($_.Name),$($_.Type),$($_.IsArray),$($_.Value)" } }'
+    adapter_properties = shell_out(adpter_cmd).stdout.strip
+
+    adapter_properties.lines.each do |line|
+      index, interface_index, adapter_name, property_name, property_type, is_array, property_value = line.strip.split(',',7)
+      is_array = (is_array == 'True' ? true : false)
+
+      true_index = index || interface_index
+      iface_instance[true_index] ||= Mash.new
+
+      if is_array
+        property_value = property_value.to_s.split(" ").map do |subvalue|
+          if property_type == 'Boolean'
+            subvalue == 'True' ? true : false
+          elsif property_type =~ /UInt(?:64|32|16|8)/
+            subvalue.to_i
+          else
+            subvalue
+          end
+        end
+      else
+        property_value = true if property_type == 'Boolean' && property_value == 'True'
+        property_value = false if property_type == 'Boolean' && property_value == 'False'
+        if property_type =~ /UInt(?:64|32|16|8)/
+          if property_value.to_s != ''
+            property_value = property_value.to_i
+          else
+            property_value = nil
+          end
+        end
+        property_value = nil if property_type == 'String' && property_value.to_s == ''
       end
+  
+      # TODO: check to see if this is even necessary
+      next if %w{creation_class_name system_creation_class_name}.include?(property_name.wmi_underscore)
+      iface_instance[true_index][property_name.wmi_underscore.to_sym] = property_value
     end
 
     iface_instance.each_key do |i|
@@ -158,10 +184,13 @@ Ohai.plugin(:Network) do
         iface[cint][:addresses] = Mash.new
         iface[cint][:configuration][:ip_address] = iface[cint][:configuration][:ip_address].flatten
 
+        
         iface[cint][:configuration][:ip_address].each_index do |ip_index|
+
           ip = iface[cint][:configuration][:ip_address][ip_index]
           ip_and_subnet = ip.dup
           ip_and_subnet << "/#{iface[cint][:configuration][:ip_subnet][ip_index]}" if iface[cint][:configuration][:ip_subnet]
+          
           ip2 = IPAddress(ip_and_subnet)
           iface[cint][:addresses][ip] = Mash.new(prefixlen: ip2.prefix)
           if ip2.ipv6?
@@ -198,7 +227,7 @@ Ohai.plugin(:Network) do
 
     cint = nil
     so = shell_out("arp -a")
-    if so.exitstatus == 0
+    if so.exit_status == 0
       so.stdout.lines do |line|
         if line =~ /^Interface:\s+(\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3})\s+[-]+\s+(0x\S+)/
           cint = $2.downcase

@@ -19,20 +19,58 @@
 Ohai.plugin(:Chef) do
   provides "chef_packages/chef"
 
-  collect_data do
-    begin
-      require "chef/version"
-    rescue Gem::LoadError
-      logger.trace("Plugin Chef: Unable to load the chef gem to determine the version")
-      # this catches when you've done a major version bump of ohai, but
-      # your chef gem is incompatible, so we can't load it in the same VM
-      # (affects mostly internal testing)
-      next # avoids us writing an empty mash
+  collect_data(:linux) do
+    # welcome to a quick implementation that gets the job done.
+
+    # Try and find chef. If it results in returning us chef its not on the path
+    # So we want to look for it in the usual install locations.
+    chef_client_bin = which('chef-client') 
+    if chef_client_bin.nil?
+      if file_exist?('/opt/chef/bin/chef-client')
+        chef_client_bin = '/opt/chef/bin/chef-client'
+      elsif file_exist?('/opt/chefdk/bin/chef-client')
+        chef_client_bin = '/opt/chefdk/bin/chef-client'
+      end
     end
 
-    chef_packages Mash.new unless chef_packages
-    chef_packages[:chef] = Mash.new
-    chef_packages[:chef][:version] = Chef::VERSION
-    chef_packages[:chef][:chef_root] = Chef::CHEF_ROOT
+    if chef_client_bin
+      chef_app_name, version = shell_out("#{chef_client_bin} --version").stdout.chomp.split(' ')
+
+      chef_packages Mash.new unless chef_packages
+      chef_packages[:chef] = Mash.new
+      chef_packages[:chef][:version] = version
+
+      # There is an assumption that it exists somewhere within this directory.
+      # There could multiple and I'm not sure which one would be prefered. I honestly would
+      # just put them all into the value here in an array.
+      chef_root = shell_out("find /opt -path '*/chef-#{version}/lib'").stdout.chomp.lines.first
+      chef_packages[:chef][:chefroot] = chef_root
+    end
+  end
+
+
+
+  collect_data(:windows) do
+    # welcome to a quick implementation that gets the job done.
+    # Try and find chef. If it results in returning us chef its not on the path
+    # So we want to look for it in the usual install locations.
+    if chef_client_bin = which('chef-client')
+      chef_app_name, version = shell_out("#{chef_client_bin} --version").stdout.chomp.split(' ')
+
+      chef_packages Mash.new unless chef_packages
+      chef_packages[:chef] = Mash.new
+      chef_packages[:chef][:version] = version
+      
+      # From the bin path determine the base path to start the search
+      chef_base_install_path = chef_client_bin.split("\\")[0..2].join("\\")
+      chef_root_results = shell_out("get-childitem -Path #{chef_base_install_path} -Filter chef-#{version}-universal-mingw32 -Directory -Recurse | Select-Object -ExpandProperty FullName")
+
+      if chef_root_results.exit_status == 0
+        # There are two entries lets asssume that the last one the gems directory and not the extensions directory
+        chef_root = chef_root_results.stdout.strip.split("\r\n")[-1]
+        chef_packages[:chef][:chefroot] = chef_root
+      end
+      
+    end
   end
 end

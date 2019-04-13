@@ -34,7 +34,7 @@ Ohai.plugin(:Network) do
   end
 
   def ipv6_enabled?
-    File.exist? "/proc/net/if_inet6"
+    file_exist? "/proc/net/if_inet6"
   end
 
   def ethtool_binary_path
@@ -42,15 +42,15 @@ Ohai.plugin(:Network) do
   end
 
   def is_openvz?
-    @openvz ||= ::File.directory?("/proc/vz")
+    @openvz ||= file_exist?("/proc/vz")
   end
 
   def is_openvz_host?
-    is_openvz? && ::File.directory?("/proc/bc")
+    is_openvz? && file_exist?("/proc/bc")
   end
 
   def extract_neighbors(family, iface, neigh_attr)
-    so = shell_out("ip -f #{family[:name]} neigh show")
+    so = shell_out("#{which("ip") || "ip"} -f #{family[:name]} neigh show")
     so.stdout.lines do |line|
       if line =~ /^([a-f0-9\:\.]+)\s+dev\s+([^\s]+)\s+lladdr\s+([a-fA-F0-9\:]+)/
         interface = iface[$2]
@@ -73,7 +73,7 @@ Ohai.plugin(:Network) do
   # 3) and since we're at it, let's populate some :routes attributes
   # (going to do that for both inet and inet6 addresses)
   def check_routing_table(family, iface, default_route_table)
-    so = shell_out("ip -o -f #{family[:name]} route show table #{default_route_table}")
+    so = shell_out("#{which("ip") || "ip"} -o -f #{family[:name]} route show table #{default_route_table}")
     so.stdout.lines do |line|
       line.strip!
       logger.trace("Plugin Network: Parsing #{line}")
@@ -202,7 +202,7 @@ Ohai.plugin(:Network) do
 
   # determine link stats, vlans, queue length, and state for an interface using ip
   def link_statistics(iface, net_counters)
-    so = shell_out("ip -d -s link")
+    so = shell_out("#{which("ip") || "ip"} -d -s link")
     tmp_int = nil
     on_rx = true
     so.stdout.lines do |line|
@@ -305,7 +305,7 @@ Ohai.plugin(:Network) do
   end
 
   def parse_ip_addr(iface)
-    so = shell_out("ip addr")
+    so = shell_out("#{which("ip") || "ip"} addr")
     cint = nil
     so.stdout.lines do |line|
       cint = match_iproute(iface, line, cint)

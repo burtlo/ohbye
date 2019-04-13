@@ -100,6 +100,53 @@ module Ohai
       @loader.load_all
     end
 
+    def backend
+      @backend ||= begin
+        # TODO: this should be borrowed code from inspec executable
+        if config[:target].nil?
+          Train.create('local')
+        elsif config[:target].to_s.start_with?('docker')
+          medium, host = config[:target].split('://')
+          Train.create('docker', host: host)
+        elsif config[:target].to_s.start_with?('ssh')
+          # ssh://user:password@host:port
+          # TODO: This has already been written within inspec. It would be
+          #   best to use that code.
+          user_pass, host_port = config[:target].gsub('ssh://','').split('@')
+          user, pass = user_pass.split(':')
+          host, port = host_port.split(':')
+
+          train_config = {
+            host: host,
+            port: port,
+            user: user,
+            password: pass,
+            key_files: config[:keyfiles]
+          }
+
+          Train.create('ssh',train_config)
+        elsif config[:target].to_s.start_with?('winrm')
+          user_pass, host_port = config[:target].gsub('winrm://','').split('@')
+
+          user, pass = user_pass.split(':')
+          host, port = host_port.split(':')
+
+          train_config = {
+            host: host,
+            port: port,
+            user: user,
+            password: pass,
+            key_files: config[:keyfiles]
+          }
+
+          Train.create('winrm', host: host, user: (user || "  Administrator"), password: pass, ssl: false)
+        else
+          fail 'unsupported target'
+        end
+        
+      end
+    end
+
     # run all plugins or those that match the attribute filter is provided
     #
     # @param safe [Boolean]
@@ -108,10 +155,23 @@ module Ohai
     # @return [Mash]
     def run_plugins(safe = false, attribute_filter = nil)
       begin
+        conn = backend.connection
+          
         @provides_map.all_plugins(attribute_filter).each do |plugin|
-          @runner.run_plugin(plugin)
+          # This is a good place to use the train connection to
+          # execute a command or look at a file.
+          # If you run ohai with a particular plugin in mind it makes 
+          # it easier to troubleshoot:
+          #
+          # plugin.data[:backend] = conn
+          # require 'pry' ; binding.pry
+          # plugin.run_plugin
+          @runner.run_plugin(plugin, conn)
         end
+        conn.close
+
       rescue Ohai::Exceptions::AttributeNotFound, Ohai::Exceptions::DependencyCycle => e
+        # require 'pry' ; binding.pry
         logger.error("Encountered error while running plugins: #{e.inspect}")
         raise
       end

@@ -19,6 +19,18 @@ Ohai.plugin(:Timezone) do
 
   collect_data(:default) do
     time Mash.new unless time
+    logger.warn('Collecting time locally and not remotely')
     time[:timezone] = Time.now.getlocal.zone
+  end
+
+  collect_data(:linux) do
+    time Mash.new unless time
+    time[:timezone] = shell_out('date +%Z').stdout.chomp
+  end
+
+  collect_data(:windows) do
+    time Mash.new unless time
+    # @see https://docs.microsoft.com/en-us/powershell/module/microsoft.powershell.management/get-timezone?view=powershell-6
+    time[:timezone] = shell_out('Get-Timezone | Select-Object -ExpandProperty StandardName').stdout.chomp
   end
 end

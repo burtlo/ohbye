@@ -21,7 +21,7 @@ Ohai.plugin(:Powershell) do
 
   collect_data(:windows) do
 
-    so = shell_out("powershell.exe -NoLogo -NonInteractive -NoProfile -command $PSVersionTable")
+    so = shell_out("$PSVersionTable")
     # Sample output:
     #
     # Name                           Value
@@ -34,7 +34,7 @@ Ohai.plugin(:Powershell) do
     # PSCompatibleVersions           {1.0, 2.0, 3.0, 4.0}
     # PSRemotingProtocolVersion      2.2
 
-    if so.exitstatus == 0
+    if so.exit_status == 0
       powershell = Mash.new
       version_info = {}
       so.stdout.strip.each_line do |line|
