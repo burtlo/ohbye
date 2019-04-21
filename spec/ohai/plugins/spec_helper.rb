@@ -58,9 +58,7 @@ Example:
     ps = plugin_source
     pp = plugin_path
     plugin_loader.instance_eval { load_v7_plugin_class(ps,pp) }
-    if platform != 'default'
-      allow(plugin).to receive(:collect_os).and_return(platform)
-    end
+    allow(plugin).to receive(:collect_os).and_return(platform)
   end
 
   after :each do
