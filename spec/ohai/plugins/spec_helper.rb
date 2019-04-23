@@ -157,7 +157,7 @@ Example:
 
     attributes.inject(top_level_mash) do |mash,child|
       begin
-        mash[child]
+        child =~ /^\d+$/ ? mash[child.to_i] : mash[child]        
       rescue Exception => e
         raise PluginAttributeUndefinedError.new(attribute, { top_level_mash_name => top_level_mash })
       end

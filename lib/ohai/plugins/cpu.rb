@@ -376,19 +376,20 @@ Ohai.plugin(:CPU) do
     cpu["real"] = cpusockets.size
   end
 
+  # @see https://docs.microsoft.com/en-us/windows/desktop/cimwin32prov/win32-processor
+  def cpu_data
+    shell_out('Get-WmiObject "Win32_Processor" | ForEach-Object { $cpu = $_ ; $cpu.Properties | ForEach-Object { Write-Host "$($cpu.DeviceID),$($_.Name),$($_.Type),$($_.Value)" } }').stdout.strip
+  end
+
   collect_data(:windows) do
     cpu Mash.new
     cores = 0
     logical_processors = 0
 
-    # @see https://docs.microsoft.com/en-us/windows/desktop/cimwin32prov/win32-processor
-    processors_results = shell_out('Get-WmiObject "Win32_Processor" | ForEach-Object { $cpu = $_ ; $cpu.Properties | ForEach-Object { Write-Host "$($cpu.DeviceID),$($_.Name),$($_.Type),$($_.Value)" } }').stdout.strip
-    
     processor_properties = %w[ Description DeviceID Family Name L2CacheSize MaxClockSpeed NumberOfCores NumberOfLogicalProcessors Manufacturer Revision Stepping ]
-
     processors = Mash.new
 
-    processors_results.lines.each do |line|
+    cpu_data.lines.each do |line|
       device_id, property_name, property_type, property_value = line.to_s.strip.split(',',4)
       
       current_cpu = device_id.to_s.gsub('CPU','').to_i
