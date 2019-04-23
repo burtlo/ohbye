@@ -16,8 +16,7 @@
 # limitations under the License.
 #
 
-require_relative "../../spec_helper.rb"
-require "wmi-lite/wmi"
+require 'spec_helper'
 require "socket"
 
 describe Ohai::System, "hostname plugin" do

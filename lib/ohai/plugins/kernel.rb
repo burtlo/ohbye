@@ -196,12 +196,17 @@ Ohai.plugin(:Kernel) do
 
     modules = Mash.new
     so = shell_out("env lsmod")
+    
+    if so.stdout == ""
+      so = shell_out(which("lsmod") || "lsmod")
+    end
+    
     so.stdout.lines do |line|
       if line =~ /([a-zA-Z0-9\_]+)\s+(\d+)\s+(\d+)/
         modules[$1] = { size: $2, refcount: $3 }
         # Making sure to get the module version that has been loaded
-        if File.exist?("/sys/module/#{$1}/version")
-          version = File.read("/sys/module/#{$1}/version").chomp.strip
+        if file_exist?("/sys/module/#{$1}/version")
+          version = file_read("/sys/module/#{$1}/version").chomp.strip
           modules[$1]["version"] = version unless version.empty?
         end
       end
@@ -226,7 +231,7 @@ Ohai.plugin(:Kernel) do
     so = shell_out("uname -s")
     kernel[:os] = so.stdout.split($/)[0]
 
-    so = File.open("/etc/release") { |file| file.gets }
+    so = file_open("/etc/release") { |file| file.gets }
     md = /(?<update>\d.*\d)/.match(so)
     kernel[:update] = md[:update] if md
 
@@ -246,21 +251,35 @@ Ohai.plugin(:Kernel) do
     kernel[:modules] = modules
   end
 
-  collect_data(:windows) do
-    require "win32ole"
-    require "wmi-lite/wmi"
-
-    WIN32OLE.codepage = WIN32OLE::CP_UTF8
-
-    wmi = WmiLite::Wmi.new
-
+  collect_data(:windows) do    
     kernel Mash.new
-
-    host = wmi.first_of("Win32_OperatingSystem")
     kernel[:os_info] = Mash.new
-    host.wmi_ole_object.properties_.each do |p|
-      next if blacklisted_wmi_name?(p.name.wmi_underscore)
-      kernel[:os_info][p.name.wmi_underscore.to_sym] = host[p.name.downcase]
+
+    host = shell_out('Get-WmiObject Win32_OperatingSystem | ForEach-Object { $_.Properties | ForEach-Object { Write-Host "$($_.Name),$($_.Type),$($_.IsArray),$($_.Value)" } }').stdout
+    
+    host.lines.each do |line|
+      property_name, property_type, is_array, property_value = line.strip.split(',',4)
+      next if blacklisted_wmi_name?(property_name.wmi_underscore)
+      is_array = (is_array == 'True' ? true : false)
+
+      if is_array
+        property_value = property_value.to_s.split(" ").map do |subvalue|
+          if property_type == 'Boolean'
+            subvalue == 'True' ? true : false
+          elsif property_type =~ /UInt(?:64|32|16|8)/
+            subvalue.to_i
+          else
+            subvalue
+          end
+        end
+      else
+        property_value = true if property_type == 'Boolean' && property_value == 'True'
+        property_value = false if property_type == 'Boolean' && property_value == 'False'
+        property_value = property_value.to_i if property_type =~ /UInt(?:64|32|16|8)/ && !property_value.nil?
+        property_value = nil if property_type == 'String' && property_value.to_s.strip == ''
+      end
+
+      kernel[:os_info][property_name.wmi_underscore.to_sym] = property_value
     end
 
     kernel[:name] = (kernel[:os_info][:caption]).to_s
@@ -271,10 +290,37 @@ Ohai.plugin(:Kernel) do
     kernel[:server_core] = server_core?(kernel[:os_info][:operating_system_sku])
 
     kernel[:cs_info] = Mash.new
-    host = wmi.first_of("Win32_ComputerSystem")
-    host.wmi_ole_object.properties_.each do |p|
-      next if blacklisted_wmi_name?(p.name.wmi_underscore)
-      kernel[:cs_info][p.name.wmi_underscore.to_sym] = host[p.name.downcase]
+
+    host = shell_out('Get-WmiObject Win32_ComputerSystem | ForEach-Object { $_.Properties | ForEach-Object { Write-Host "$($_.Name),$($_.Type),$($_.IsArray),$($_.Value)" } }').stdout
+    host.lines.each do |line|
+      property_name, property_type, is_array, property_value = line.strip.split(',',4)
+      next if blacklisted_wmi_name?(property_name.wmi_underscore)
+      is_array = (is_array == 'True' ? true : false)
+      
+      if is_array
+        property_value = property_value.to_s.split(" ").map do |subvalue|
+          if property_type == 'Boolean'
+            subvalue == 'True' ? true : false
+          elsif property_type =~ /UInt(?:64|32|16|8)/
+            subvalue.to_i
+          else
+            subvalue
+          end
+        end
+      else
+        property_value = true if property_type == 'Boolean' && property_value == 'True'
+        property_value = false if property_type == 'Boolean' && property_value == 'False'
+        if property_type =~ /UInt(?:64|32|16|8)/
+          if property_value.to_s != ''
+            property_value = property_value.to_i
+          else
+            property_value = nil
+          end
+        end
+        property_value = nil if property_type == 'String' && property_value.to_s == ''
+      end
+
+      kernel[:cs_info][property_name.wmi_underscore.to_sym] = property_value
     end
 
     kernel[:machine] = arch_lookup((kernel[:cs_info][:system_type]).to_s)

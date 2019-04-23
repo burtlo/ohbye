@@ -14,11 +14,10 @@
 # limitations under the License.
 #
 
-require_relative "../../../spec_helper.rb"
+require 'spec_helper'
 
 describe Ohai::System, "Windows memory plugin", :windows_only do
   before do
-    require "wmi-lite/wmi"
     @plugin = get_plugin("windows/memory")
     mock_os = {
                 "TotalVisibleMemorySize" => "10485760",

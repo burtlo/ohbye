@@ -30,7 +30,7 @@ Ohai.plugin(:CPU) do
   def parse_bsd_dmesg(&block)
     cpuinfo = Mash.new
     cpuinfo["flags"] = []
-    File.open("/var/run/dmesg.boot").each do |line|
+    file_open("/var/run/dmesg.boot").each do |line|
       case line
       when /CPU:\s+(.+) \(([\d.]+).+\)/
         cpuinfo["model_name"] = $1
@@ -53,7 +53,7 @@ Ohai.plugin(:CPU) do
     cpu_number = 0
     current_cpu = nil
 
-    File.open("/proc/cpuinfo").each do |line|
+    file_open("/proc/cpuinfo").each do |line|
       case line
       when /processor\s+:\s(.+)/
         cpuinfo[$1] = Mash.new
@@ -122,7 +122,7 @@ Ohai.plugin(:CPU) do
       begin
         logger.trace("Plugin CPU: Falling back to aggregate data from lscpu as real cpu & core data is missing in /proc/cpuinfo")
         so = shell_out("lscpu")
-        if so.exitstatus == 0
+        if so.exit_status == 0
           lscpu_data = Mash.new
           so.stdout.each_line do |line|
             case line
@@ -212,7 +212,7 @@ Ohai.plugin(:CPU) do
     # to scrape from dmesg.boot is the cpu feature list.
     # cpu0: FPU,V86,DE,PSE,TSC,MSR,MCE,CX8,SEP,MTRR,PGE,MCA,CMOV,PAT,CFLUSH,DS,ACPI,MMX,FXSR,SSE,SSE2,SS,TM,SBF,EST,TM2
 
-    File.open("/var/run/dmesg.boot").each do |line|
+    file_open("/var/run/dmesg.boot").each do |line|
       case line
       when /cpu\d+:\s+([A-Z]+$|[A-Z]+,.*$)/
         cpuinfo["flags"] = $1.downcase.split(",")
@@ -235,7 +235,7 @@ Ohai.plugin(:CPU) do
     # available instruction set
     # cpu0 at mainbus0 apid 0: Intel 686-class, 2134MHz, id 0x6f6
 
-    File.open("/var/run/dmesg.boot").each do |line|
+    file_open("/var/run/dmesg.boot").each do |line|
       case line
       when /cpu[\d\w\s]+:\s([\w\s\-]+),\s+(\w+),/
         cpuinfo[:model_name] = $1
@@ -376,37 +376,53 @@ Ohai.plugin(:CPU) do
     cpu["real"] = cpusockets.size
   end
 
-  collect_data(:windows) do
-    require "wmi-lite/wmi"
+  # @see https://docs.microsoft.com/en-us/windows/desktop/cimwin32prov/win32-processor
+  def cpu_data
+    shell_out('Get-WmiObject "Win32_Processor" | ForEach-Object { $cpu = $_ ; $cpu.Properties | ForEach-Object { Write-Host "$($cpu.DeviceID),$($_.Name),$($_.Type),$($_.Value)" } }').stdout.strip
+  end
 
+  collect_data(:windows) do
     cpu Mash.new
     cores = 0
     logical_processors = 0
 
-    wmi = WmiLite::Wmi.new
-    processors = wmi.instances_of("Win32_Processor")
+    processor_properties = %w[ Description DeviceID Family Name L2CacheSize MaxClockSpeed NumberOfCores NumberOfLogicalProcessors Manufacturer Revision Stepping ]
+    processors = Mash.new
 
-    processors.each_with_index do |processor, index|
-      current_cpu = index.to_s
-      cpu[current_cpu] = Mash.new
+    cpu_data.lines.each do |line|
+      device_id, property_name, property_type, property_value = line.to_s.strip.split(',',4)
+      
+      current_cpu = device_id.to_s.gsub('CPU','').to_i
+      processors[current_cpu] ||= Mash.new
+      next unless processor_properties.include?(property_name)
 
-      cpu[current_cpu]["cores"] = processor["numberofcores"]
-      cores += processor["numberofcores"]
+      property_value = true if property_type == 'Boolean' && property_value == 'True'
+      property_value = false if property_type == 'Boolean' && property_value == 'False'
+      property_value = property_value.to_i if property_type =~ /UInt(?:64|32|16|8)/ && !property_value.nil?
+      property_value = nil if property_type == 'String' && property_value.to_s.strip == ''
 
-      logical_processors += processor["numberoflogicalprocessors"]
-      cpu[current_cpu]["vendor_id"] = processor["manufacturer"]
-      cpu[current_cpu]["family"] = processor["family"].to_s
-      cpu[current_cpu]["model"] = processor["revision"].to_s
-      cpu[current_cpu]["stepping"] = if processor["stepping"].nil?
-                                       processor["description"].match(/Stepping\s+(\d+)/)[1]
-                                     else
-                                       processor["stepping"]
-                                     end
-      cpu[current_cpu]["physical_id"] = processor["deviceid"]
-      cpu[current_cpu]["model_name"] = processor["name"]
-      cpu[current_cpu]["description"] = processor["description"]
-      cpu[current_cpu]["mhz"] = processor["maxclockspeed"].to_s
-      cpu[current_cpu]["cache_size"] = "#{processor['l2cachesize']} KB"
+      processors[current_cpu][property_name.wmi_underscore.to_sym] = property_value
+    end
+
+    processors.each do |device_id, data|
+      cpu[device_id] ||= Mash.new
+      current = cpu[device_id]
+
+      current[:cores] = data[:number_of_cores]
+      current[:vendor_id] = data[:manufacturer]
+      current[:family] = data[:family]
+      current[:model] = data[:revision]
+
+      current[:physical_id] = data[:device_id]
+      current[:model_name] = data[:name]
+      current[:description] = data[:description]
+      current[:mhz] = data[:max_clock_speed]
+      current[:cache_size] = "#{data[:l2_cache_size]}kB"
+      
+      current[:stepping] = data[:stepping] || data[:description].match(/Stepping\s+(\d+)/)[1]
+      
+      cores += data[:number_of_cores]
+      logical_processors += data[:number_of_logical_processors]
     end
 
     cpu[:total] = logical_processors

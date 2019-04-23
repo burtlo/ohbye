@@ -29,12 +29,16 @@ Ohai.plugin(:Uptime) do
   provides "uptime", "uptime_seconds"
   provides "idletime", "idletime_seconds" # linux only
 
+  def time_now
+    Time.new
+  end
+
   def collect_uptime(path)
     # kern.boottime: { sec = 1232765114, usec = 823118 } Fri Jan 23 18:45:14 2009
-    so = shell_out("#{Ohai.abs_path(path)} kern.boottime")
+    so = shell_out("#{path} kern.boottime")
     so.stdout.lines do |line|
       if line =~ /kern.boottime:\D+(\d+)/
-        usec = Time.new.to_i - $1.to_i
+        usec = time_now.to_i - $1.to_i
         return [usec, seconds_to_human(usec)]
       end
     end
@@ -54,7 +58,7 @@ Ohai.plugin(:Uptime) do
   end
 
   collect_data(:linux) do
-    uptime, idletime = File.open("/proc/uptime").gets.split(" ")
+    uptime, idletime = file_open("/proc/uptime").gets.split(" ")
     uptime_seconds uptime.to_i
     uptime seconds_to_human(uptime.to_i)
     idletime_seconds idletime.to_i
@@ -63,10 +67,10 @@ Ohai.plugin(:Uptime) do
 
   collect_data(:openbsd) do
     # kern.boottime=Tue Nov  1 14:45:52 2011
-    so = shell_out("#{Ohai.abs_path( "/sbin/sysctl" )} #kern.boottime")
+    so = shell_out("/sbin/sysctl #kern.boottime")
     so.stdout.lines do |line|
       if line =~ /kern.boottime=(.+)/
-        uptime_seconds Time.new.to_i - Time.parse($1).to_i
+        uptime_seconds time_now.to_i - Time.parse($1).to_i
         uptime seconds_to_human(uptime_seconds)
       end
     end
@@ -77,17 +81,15 @@ Ohai.plugin(:Uptime) do
     # unix:0:system_misc:boot_time    1343860543
     so.stdout.lines do |line|
       if line =~ /unix:0:system_misc:boot_time\s+(\d+)/
-        uptime_seconds Time.new.to_i - $1.to_i
+        uptime_seconds time_now.to_i - $1.to_i
         uptime seconds_to_human(uptime_seconds)
       end
     end
   end
 
   collect_data(:windows) do
-    require "wmi-lite/wmi"
-    wmi = WmiLite::Wmi.new
-    last_boot_up_time = wmi.first_of("Win32_OperatingSystem")["lastbootuptime"]
-    uptime_seconds Time.new.to_i - Time.parse(last_boot_up_time).to_i
+    last_boot_up_time = shell_out('Get-WmiObject "Win32_OperatingSystem" | ForEach-Object { Write-Host "$($_.LastBootUptime)" }').stdout.strip
+    uptime_seconds time_now.to_i - Time.parse(last_boot_up_time).to_i
     uptime seconds_to_human(uptime_seconds)
   end
 

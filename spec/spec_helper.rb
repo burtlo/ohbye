@@ -8,16 +8,26 @@ $:.unshift(File.dirname(__FILE__) + "/../lib")
 
 require "spec/support/platform_helpers"
 require "spec/support/integration_helper"
-require "wmi-lite"
 require "ohai"
 Ohai.config[:log_level] = :error
 
 PLUGIN_PATH = File.expand_path("../../lib/ohai/plugins", __FILE__)
 SPEC_PLUGIN_PATH = File.expand_path("../data/plugins", __FILE__)
 
+require 'ohai/plugins/spec_helper'
+
 RSpec.configure do |config|
   config.before(:each) { @object_pristine = Object.clone }
   config.after(:each) { remove_constants }
+  #
+  # Add a convienent name for the example group to the RSpec lexicon. This
+  # allows a user to write:
+  #     'desribe_ohai_plugin :Apache'.
+  #
+  # As opposed to appending a type to the declaration of the spec:
+  #   'describe :Apache, type: :ohai_plugin'
+  #
+  config.alias_example_group_to :describe_ohai_plugin, type: :ohai_plugin
 end
 
 include Ohai::Mixin::ConstantHelper
